@@ -1,0 +1,198 @@
+# Ajuste a sua variável de ambiente AWS_PROFILE para o perfil desejado
+
+# Crie um security group para as instancias e anote o seu GroupId
+aws ec2 create-security-group --group-name pedrocosta-sg \
+                              --description "Security Group For Job Scheduler"
+
+# Crie as regras desejadas para esse SecGroup, nesse exemplo estamos permitindo tráfego
+# externo de ssh caso deseje inspecionar a máquina. No exemplo estamos permitindo qualquer IP,
+# em um ambiente produtivo deve-se usar uam faixa ou um IP específico.
+# Note que estamos passando o nome do SecGroup usado acima.
+aws ec2 authorize-security-group-ingress --group-name pedrocosta-sg \
+                                         --protocol tcp --port 22 \
+                                         --cidr 0.0.0.0/0
+
+# Para criar um perfil de acesso ao Dynamo
+# Atenção ao caminho do primeiro comando. O Arquivo é fornecido.
+aws iam create-role --role-name dynamodb-role-for-ec2 \
+                    --assume-role-policy-document file:///jobscheduler/iam/dynamodb-role-for-ec2.json
+aws iam attach-role-policy --role-name dynamodb-role-for-ec2 \
+                           --policy-arn arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
+
+# Criando o perfil de spotIntances para os Jobs
+aws iam create-instance-profile --instance-profile-name dynamodb-instanceprofile-for-ec2
+aws iam add-role-to-instance-profile --instance-profile-name dynamodb-instanceprofile-for-ec2 \
+        --role-name dynamodb-role-for-ec2
+
+
+#Agora vamos criar o perfil de acesso para as funções lambda e a sua politica
+# execute os dois comandos alterando o caminho para os arquivos que são fornecidos
+aws iam create-role --role-name lambda-gateway-execution-role \
+        --assume-role-policy-document file:///jobscheduler/iam/lambda_dynamo_role_policy.json
+aws iam put-role-policy --role-name lambda-gateway-execution-role \
+                        --policy-name LambdaApiGatewayPolicy \
+                        --policy-document file:///jobscheduler/iam/lambda-gateway-execution-role-policy.json \
+
+#Para criar a tabela no dynamoDb usada para persistir os dados da solução
+aws dynamodb create-table \
+    --table-name Jobs \
+    --attribute-definitions \
+        AttributeName=imageName,AttributeType=S \
+        AttributeName=dateToRun,AttributeType=S \
+    --key-schema AttributeName=imageName,KeyType=HASH AttributeName=dateToRun,KeyType=RANGE \
+    --provisioned-throughput ReadCapacityUnits=10,WriteCapacityUnits=10
+
+# Criando os pacotes das funções lambda
+chmod 755 packageFunctions.sh
+./packageFunctions.sh
+
+# Criando o perfil de execucao das funções lambda
+
+
+# Criando a função Lambda eventReceiver, atenção substitua os seguintes campos
+# --zip-file ajuste com o caminho em sua máquina
+# --role     ajuste o accountId de acordo com a sua conta no AWS
+aws lambda create-function \
+           --region us-west-2 --function-name eventReceiver \
+           --zip-file fileb:///jobscheduler/eventReceiver.zip \
+           --role arn:aws:iam::381247262190:role/lambda-gateway-execution-role \
+           --handler eventReceiver.handler \
+           --runtime nodejs4.3
+
+# Criacao do evento no cloud watch que vai evocar a função eventReceiver.
+# Para essa PoC usaremos eventos de 1 em 1 minuto, no entanto podemos usar
+# qualquer cron expression
+aws events put-rule --name OneMinuteRule \
+                    --schedule-expression 'rate(1 minute)'
+
+# Informando o destino do evento (notificação), obviamente a função eventReceiver
+# atenção substitua os seguintes campos
+# --targets ajuste o accountId de acordo com a sua conta no AWS           
+aws events put-targets --rule OneMinuteRule \
+           --targets '{"Id" : "1", "Arn": "arn:aws:lambda:us-west-2:381247262190:function:eventReceiver"}'
+
+
+# Cedendo permissao para a funcao lambda de evento se acionada para regra do cloudwatch
+# atenção substitua os seguintes campos
+# --source-arn ajuste o accountId de acordo com a sua conta no AWS
+aws lambda add-permission --function-name eventReceiver \
+           --statement-id schedulingJobsId --action 'lambda:InvokeFunction' \
+           --principal events.amazonaws.com \
+           --source-arn arn:aws:events:us-west-2:381247262190:rule/OneMinuteRule
+
+# Criando a função Lambda jobRESTService, que de fato implementa a API jobscheduler
+# Atenção substitua os seguintes campos
+# --zip-file ajuste com o caminho em sua máquina
+# --role     ajuste o accountId de acordo com a sua conta no AWS
+aws lambda create-function --region us-west-2 \
+           --function-name jobRESTService \
+           --zip-file fileb:///jobscheduler/jobRESTService.zip \
+           --role arn:aws:iam::381247262190:role/lambda-gateway-execution-role \
+           --handler jobRESTService.RESTHandler \
+           --runtime nodejs4.3
+
+#Comandos para criar a API no apigateway
+
+#Cria a raiz da API, anote a saida com o id da API
+aws apigateway create-rest-api --name JobSchedulerAPI
+
+#Faz a chamada de resources para obter o id do resource
+#atencao substitua o --rest-api-id com o id do comando anterior
+aws apigateway get-resources --rest-api-id who7xqyt7k
+
+#Cria o recurso principal
+#atencao substitua
+#--rest-api-id com o id da API
+#--parent-id com o id do comando anterior
+aws apigateway create-resource --rest-api-id who7xqyt7k \
+                               --parent-id 1mmwft6bl9 \
+                               --path-part JobScheduler
+
+#Define o metodo POST para API
+#atencao substitua
+#--rest-api-id com o id da API
+#--resource-id com o id do comando anterior
+aws apigateway put-method --rest-api-id who7xqyt7k \
+                          --resource-id f9zq23 \
+                          --http-method POST \
+                          --authorization-type NONE
+
+#Define o target do metodo POST, ou seja, a lambda function
+#atencao substitua
+#--rest-api-id com o id da API
+#--resource-id com o id do recurso da raiz
+#--uri com o account id da conta desejada
+aws apigateway put-integration --rest-api-id who7xqyt7k \
+                               --resource-id f9zq23 \
+                               --http-method POST --type AWS \
+                               --integration-http-method POST \
+                               --uri arn:aws:apigateway:us-west-2:lambda:path/2015-03-31/functions/arn:aws:lambda:us-west-2:381247262190:function:jobRESTService/invocations \
+
+#Define o fomrmato das respostas do metodo post (integracao)
+#atencao substitua
+#--rest-api-id com o id da API
+#--resource-id com o id do recurso da raiz
+aws apigateway put-integration-response --rest-api-id who7xqyt7k --resource-id f9zq23 \
+                                        --http-method POST --status-code 200 \
+                                        --response-templates "{\"application/json\": \"\"}" \
+
+#Define o fomrmato das respostas do metodo post (metodo)
+#atencao substitua
+#--rest-api-id com o id da API
+#--resource-id com o id do recurso da raiz
+aws apigateway put-method-response --rest-api-id who7xqyt7k --resource-id f9zq23 \
+                                   --http-method POST --status-code 200 \
+                                   --response-models "{\"application/json\": \"Empty\"}"
+
+#Executa o deploy
+#atencao substitua
+#--rest-api-id com o id da API
+aws apigateway create-deployment --rest-api-id  who7xqyt7k --stage-name prod 
+
+#Define as permissoes para a lambda function
+#atencao substitua
+#--rest-api-id com o id da API
+#--uri com o account id da conta desejada
+aws lambda add-permission --function-name jobRESTService \
+           --statement-id apigateway-test-2 --action lambda:InvokeFunction \
+           --principal apigateway.amazonaws.com \
+           --source-arn "arn:aws:execute-api:us-west-2:381247262190:who7xqyt7k/*/POST/JobScheduler"
+
+#Define as permissoes para a lambda function
+#atencao substitua
+#--rest-api-id com o id da API
+#--uri com o account id da conta desejada
+aws lambda add-permission --function-name jobRESTService --statement-id apigateway-prod-2 \
+           --action lambda:InvokeFunction --principal apigateway.amazonaws.com \
+           --source-arn "arn:aws:execute-api:us-west-2:381247262190:who7xqyt7k/prod/POST/JobScheduler"
+
+#Atualizar as constantes no incio arquivo ec2.js
+#const apiId = 'who7xqyt7k';
+#const keyName = 'TemporeKeyPair_US_WEST_2';
+#const securityGroupId = 'sg-99dd1efd';
+#const instanceProfile = 'Arn=arn:aws:iam::381247262190:instance-profile/dynamodb-instanceprofile-for-ec2';
+#const spotPrice = '0.05';
+
+#Re-executar o packageFunctions.sh e atualizar a funcao lambda
+#atencao ao caminho do pacote no comando abaixo.
+chmod 755 packageFunctions.sh
+./packageFunctions.sh
+aws lambda update-function-code --region us-west-2 
+           --function-name eventReceiver 
+           --zip-file fileb:///jobscheduler/eventReceiver.zip
+
+# Para facilitar o teste da API, pode-se usar os arquivos: listJobs.json, scheduleJob.json, status.json dessa forma
+# Atencao ao apiId que faz parte da URL
+curl -H "Content-Type: application/json" --data @input/listJobs.json https://juawrcs9g4.execute-api.us-west-2.amazonaws.com/prod/JobScheduler
+
+#Clean up
+aws lambda remove-permission --function-name jobRESTService --statement-id apigateway-prod-2
+aws lambda remove-permission --function-name jobRESTService --statement-id apigateway-test-2
+#Atencao aos ids
+aws apigateway delete-resource --rest-api-id 7v6szwv9hj --resource-id oyekp5
+aws apigateway delete-rest-api --rest-api-id 7v6szwv9hj
+aws lambda delete-function  --function-name jobRESTService
+aws events remove-targets --rule OneMinuteRule --ids '1'
+aws events delete-rule --name OneMinuteRule
+aws lambda delete-function  --function-name eventReceiver
+aws dynamodb delete-table --table-name Jobs

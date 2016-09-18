@@ -1,0 +1,11 @@
+{
+    "operation": "schedule",
+    "payload": {
+        "imageName": "ubuntu",
+        "dateToRun": "2016-10-26T19:22:48.986Z",
+        "environmentVariablesList": [
+            "ENV=15",
+            "ENV=165"
+        ]
+    }
+}

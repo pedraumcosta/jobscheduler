@@ -1,0 +1,28 @@
+{
+  "name": "jobscheduler",
+  "version": "1.0.0",
+  "description": "Shedule jobs for Docker containers in AWS",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test-unit": "NODE_ENV=test mocha --require co-mocha '*.spec.js'"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "mocha": "^3.0.2",
+    "chai": "^3.5.0",
+    "should": "^11.1.0",
+    "sinon": "^1.17.5",
+    "sinon-chai": "^2.8.0",
+    "supertest": "^2.0.0"
+  },
+  "dependencies": {
+    "async": "^2.0.1",
+    "aws-sdk": "^2.6.1",
+    "body-parser": "^1.15.2",
+    "express": "^4.14.0",
+    "moment": "^2.15.0"
+  }
+}
