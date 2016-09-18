@@ -30,3 +30,7 @@ In order to deploy the solution follow instructions on aws_deploy.txt.
 # Tests
 
 The solution can be tested with mocha.
+
+# Improvements
+
+To improve the PoC is possible to automate the script deploy obtaining the output for some commands and give as input for others if one desires to still use shell scripts. Another possibility is the create a CloudFormation stack to provision the solution. Additionally, using Github and AWS (or other tools like Jenkins or CircleCI) is possible to automate the code updates, including checks in the existent tests. It's also possible to gather the API logs using Cloud Trail.
