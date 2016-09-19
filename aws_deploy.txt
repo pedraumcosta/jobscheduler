@@ -1,5 +1,10 @@
 # Ajuste a sua variável de ambiente AWS_PROFILE para o perfil desejado
 
+# traga os arquivos do projeto
+git clone https://github.com/pedraumcosta/jobscheduler.git
+cd jobscheduler
+npm install
+
 # Crie um security group para as instancias e anote o seu GroupId
 aws ec2 create-security-group --group-name pedrocosta-sg \
                               --description "Security Group For Job Scheduler"
